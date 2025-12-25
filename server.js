@@ -6,6 +6,19 @@ const fs = require("fs");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+
+app.options("*", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.sendStatus(204);
+});
+
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
+
 /* ───────────────────────────────────────
    ABSOLUTE CORS FIX (NO DEPENDENCY)
    ─────────────────────────────────────── */
@@ -121,3 +134,4 @@ app.post("/rename-file", (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
