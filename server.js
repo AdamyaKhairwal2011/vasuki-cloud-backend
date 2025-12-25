@@ -2,151 +2,122 @@ const express = require("express");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const cors = require("cors");
-
-const PORT = process.env.PORT || 3000;
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
+/* ───────────────────────────────────────
+   ABSOLUTE CORS FIX (NO DEPENDENCY)
+   ─────────────────────────────────────── */
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+  );
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
 
-app.options("*", cors());
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204); // PRE-FLIGHT TERMINATION
+  }
+
+  next();
+});
 
 app.use(express.json());
 
-
-// Base uploads folder
+/* ───────────────────────────────────────
+   FILE STORAGE SETUP
+   ─────────────────────────────────────── */
 const UPLOADS_ROOT = path.join(__dirname, "uploads");
 
-// Ensure uploads folder exists
 if (!fs.existsSync(UPLOADS_ROOT)) {
-  fs.mkdirSync(UPLOADS_ROOT);
+  fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
 }
 
-// Multer storage
+const sanitizeEmail = (email) =>
+  email.replace(/[^a-zA-Z0-9@._-]/g, "");
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const email = req.body.email;
-    if (!email) return cb(new Error("Email is required"));
+    if (!email) return cb(new Error("Email required"));
 
-    const safeEmail = email.replace(/[^a-zA-Z0-9@._-]/g, "");
-    const userFolder = path.join(UPLOADS_ROOT, safeEmail);
+    const userDir = path.join(UPLOADS_ROOT, sanitizeEmail(email));
+    fs.mkdirSync(userDir, { recursive: true });
 
-    if (!fs.existsSync(userFolder)) {
-      fs.mkdirSync(userFolder);
-    }
-
-    cb(null, userFolder);
+    cb(null, userDir);
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
+    cb(null, `${Date.now()}-${file.originalname}`);
   }
 });
 
 const upload = multer({ storage });
 
-/* ================= UPLOAD ================= */
-app.post("/upload", upload.array("files", 10), (req, res) => {
-  if (!req.files?.length) {
-    return res.status(400).json({ message: "No files uploaded" });
-  }
+/* ───────────────────────────────────────
+   ROUTES
+   ─────────────────────────────────────── */
 
+// HEALTH CHECK
+app.get("/", (req, res) => {
+  res.send("Backend running 🚀");
+});
+
+// UPLOAD
+app.post("/upload", upload.array("files", 10), (req, res) => {
   res.json({
-    message: "Files uploaded successfully",
-    files: req.files.map(f => ({ filename: f.filename }))
+    message: "Uploaded",
+    files: req.files.map(f => f.filename)
   });
 });
 
-/* ================= LIST FILES ================= */
+// LIST FILES
 app.post("/list-files", (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: "Email required" });
 
-  const safeEmail = email.replace(/[^a-zA-Z0-9@._-]/g, "");
-  const userFolder = path.join(UPLOADS_ROOT, safeEmail);
+  const dir = path.join(UPLOADS_ROOT, sanitizeEmail(email));
+  if (!fs.existsSync(dir)) return res.json({ files: [] });
 
-  if (!fs.existsSync(userFolder)) {
-    return res.json({ files: [] });
-  }
-
-  const files = fs.readdirSync(userFolder).map(name => {
-    const stats = fs.statSync(path.join(userFolder, name));
-    return {
-      name,
-      size: stats.size,
-      modified: stats.mtime
-    };
-  });
-
-  res.json({ files });
+  res.json({ files: fs.readdirSync(dir) });
 });
 
-/* ================= DOWNLOAD ================= */
-app.get("/download/:email/:filename", (req, res) => {
-  const safeEmail = req.params.email.replace(/[^a-zA-Z0-9@._-]/g, "");
-  const filename = path.basename(req.params.filename);
-
-  const filePath = path.join(UPLOADS_ROOT, safeEmail, filename);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ message: "File not found" });
-  }
-
-  res.download(filePath);
-});
-
-/* ================= RENAME FILE ================= */
-app.post("/rename-file", (req, res) => {
-  const { email, oldName, newName } = req.body;
-  if (!email || !oldName || !newName) {
-    return res.status(400).json({ message: "Missing fields" });
-  }
-
-  const safeEmail = email.replace(/[^a-zA-Z0-9@._-]/g, "");
-  const userFolder = path.join(UPLOADS_ROOT, safeEmail);
-
-  const oldPath = path.join(userFolder, path.basename(oldName));
-  const newPath = path.join(userFolder, path.basename(newName));
-
-  if (!fs.existsSync(oldPath)) {
-    return res.status(404).json({ message: "File not found" });
-  }
-
-  fs.renameSync(oldPath, newPath);
-  res.json({ message: "File renamed successfully" });
-});
-
-/* ================= DELETE FILE ================= */
+// DELETE FILE
 app.post("/delete-file", (req, res) => {
   const { email, filename } = req.body;
-  if (!email || !filename) {
-    return res.status(400).json({ message: "Missing fields" });
-  }
-
-  const safeEmail = email.replace(/[^a-zA-Z0-9@._-]/g, "");
   const filePath = path.join(
     UPLOADS_ROOT,
-    safeEmail,
-    path.basename(filename)
+    sanitizeEmail(email),
+    filename
   );
 
-  if (!fs.existsSync(filePath)) {
+  if (!fs.existsSync(filePath))
     return res.status(404).json({ message: "File not found" });
-  }
 
   fs.unlinkSync(filePath);
-  res.json({ message: "File deleted successfully" });
+  res.json({ message: "Deleted" });
 });
 
-/* ================= HEALTH ================= */
-app.get("/", (req, res) => {
-  res.send("File upload backend running 🚀");
+// RENAME FILE
+app.post("/rename-file", (req, res) => {
+  const { email, oldName, newName } = req.body;
+
+  const base = path.join(UPLOADS_ROOT, sanitizeEmail(email));
+  const oldPath = path.join(base, oldName);
+  const newPath = path.join(base, newName);
+
+  if (!fs.existsSync(oldPath))
+    return res.status(404).json({ message: "File not found" });
+
+  fs.renameSync(oldPath, newPath);
+  res.json({ message: "Renamed" });
 });
 
+/* ─────────────────────────────────────── */
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
