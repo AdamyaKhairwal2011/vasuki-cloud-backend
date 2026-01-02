@@ -1,144 +1,136 @@
-const express = require("express");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const cors = require("cors");
+const express=require("express");
+const multer=require("multer");
+const path=require("path");
+const fs=require("fs");
+const cors=require("cors");
 
-const app = express();
-const PORT = 3000;
+const app=express();
+const PORT=3000;
 
 app.use(cors());
 app.use(express.json());
 
-// Base uploads folder
-const UPLOADS_ROOT = path.join(__dirname, "uploads");
+const UPLOADS=path.join(__dirname,"uploads");
+const SHARES=path.join(__dirname,"shares.json");
+if(!fs.existsSync(UPLOADS))fs.mkdirSync(UPLOADS);
+if(!fs.existsSync(SHARES))fs.writeFileSync(SHARES,"{}");
 
-// Ensure uploads folder exists
-if (!fs.existsSync(UPLOADS_ROOT)) {
-  fs.mkdirSync(UPLOADS_ROOT);
-}
+const safe=v=>v.replace(/[^a-zA-Z0-9@._/-]/g,"").replace(/\.\./g,"");
+const readShares=()=>JSON.parse(fs.readFileSync(SHARES));
+const writeShares=d=>fs.writeFileSync(SHARES,JSON.stringify(d,null,2));
+const token=()=>Math.random().toString(36).slice(2)+Date.now();
 
-// Multer storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const email = req.body.email;
-    if (!email) return cb(new Error("Email is required"));
-
-    const safeEmail = email.replace(/[^a-zA-Z0-9@._-]/g, "");
-    const userFolder = path.join(UPLOADS_ROOT, safeEmail);
-
-    if (!fs.existsSync(userFolder)) {
-      fs.mkdirSync(userFolder);
-    }
-
-    cb(null, userFolder);
+/* MULTER */
+const storage=multer.diskStorage({
+  destination:(req,file,cb)=>{
+    const dir=path.join(UPLOADS,safe(req.body.email),safe(req.body.folder||""));
+    fs.mkdirSync(dir,{recursive:true});
+    cb(null,dir);
   },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
-  }
+  filename:(req,file,cb)=>cb(null,file.originalname)
+});
+const upload=multer({storage});
+
+/* CREATE FOLDER */
+app.post("/create-folder",(req,res)=>{
+  const dir=path.join(UPLOADS,safe(req.body.email),safe(req.body.folder||""),safe(req.body.name));
+  fs.mkdirSync(dir,{recursive:true});
+  res.json({ok:true});
 });
 
-const upload = multer({ storage });
+/* LIST */
+app.post("/list-files",(req,res)=>{
+  const dir=path.join(UPLOADS,safe(req.body.email),safe(req.body.folder||""));
+  if(!fs.existsSync(dir))return res.json({files:[]});
+  const files=fs.readdirSync(dir).map(n=>{
+    const s=fs.statSync(path.join(dir,n));
+    return {name:n,isFolder:s.isDirectory(),size:s.size};
+  });
+  res.json({files});
+});
 
-/* ============ UPLOAD ============ */
-app.post("/upload", upload.array("files", 10), (req, res) => {
-  if (!req.files?.length) {
-    return res.status(400).json({ message: "No files uploaded" });
-  }
+/* UPLOAD */
+app.post("/upload",upload.array("files",20),(req,res)=>res.json({ok:true}));
+
+/* DELETE */
+app.post("/delete-file",(req,res)=>{
+  const p=path.join(UPLOADS,safe(req.body.email),safe(req.body.path));
+  fs.lstatSync(p).isDirectory()
+    ? fs.rmSync(p,{recursive:true,force:true})
+    : fs.unlinkSync(p);
+  res.json({ok:true});
+});
+
+/* RENAME */
+app.post("/rename-file",(req,res)=>{
+  const oldP=path.join(UPLOADS,safe(req.body.email),safe(req.body.oldPath));
+  const newP=path.join(path.dirname(oldP),safe(req.body.newName));
+  fs.renameSync(oldP,newP);
+  res.json({ok:true});
+});
+
+/* DOWNLOAD */
+app.get("/download/:email/*",(req,res)=>{
+  const p=path.join(UPLOADS,safe(req.params.email),safe(req.params[0]));
+  res.download(p);
+});
+
+/* ===== SHARE CREATE (MULTI FILE) ===== */
+app.post("/share", (req, res) => {
+  const { email, files, permission } = req.body;
+  if (!email || !files || !files.length)
+    return res.status(400).json({ error: "Invalid share request" });
+
+  const db = readShares();
+  const t = token();
+
+  db[t] = {
+    email,
+    files: files.map(safe),
+    permission,
+    created: Date.now(),
+    expires: Date.now() + 24 * 60 * 60 * 1000
+  };
+
+  writeShares(db);
 
   res.json({
-    message: "Uploaded successfully",
-    files: req.files.map(f => f.filename)
+    url: `https://vasuki.cloud/share.html?token=${t}`
   });
 });
 
-/* ============ LIST FILES ============ */
-app.post("/list-files", (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ message: "Email required" });
+/* ===== SHARE METADATA ===== */
+app.get("/shared-info/:token", (req, res) => {
+  const db = readShares();
+  const s = db[req.params.token];
+  if (!s || Date.now() > s.expires)
+    return res.sendStatus(404);
 
-  const safeEmail = email.replace(/[^a-zA-Z0-9@._-]/g, "");
-  const userFolder = path.join(UPLOADS_ROOT, safeEmail);
-
-  if (!fs.existsSync(userFolder)) {
-    return res.json({ files: [] });
-  }
-
-  const files = fs.readdirSync(userFolder).map(file => {
-    const stats = fs.statSync(path.join(userFolder, file));
-    return {
-      name: file,
-      size: stats.size,
-      modified: stats.mtime
-    };
+  res.json({
+    user: s.email,
+    files: s.files,
+    perm: s.permission
   });
-
-  res.json({ files });
 });
 
-/* ============ DOWNLOAD FILE ============ */
-app.get("/download/:email/:filename", (req, res) => {
-  const safeEmail = req.params.email.replace(/[^a-zA-Z0-9@._-]/g, "");
-  const filename = path.basename(req.params.filename);
+/* ===== SHARED FILE ACCESS ===== */
+app.get("/shared-file/:token/*", (req, res) => {
+  const db = readShares();
+  const s = db[req.params.token];
+  if (!s || Date.now() > s.expires) return res.sendStatus(404);
 
-  const filePath = path.join(UPLOADS_ROOT, safeEmail, filename);
+  const fileRel = safe(req.params[0]);
+  if (!s.files.includes(fileRel)) return res.sendStatus(403);
 
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ message: "File not found" });
+  const filePath = path.join(UPLOADS, safe(s.email), fileRel);
+  if (!fs.existsSync(filePath)) return res.sendStatus(404);
+
+  if (s.permission === "read") {
+    res.setHeader("Content-Disposition", "inline");
+    res.sendFile(filePath);
+  } else {
+    res.download(filePath);
   }
-
-  res.download(filePath);
 });
 
-/* ============ RENAME FILE ============ */
-app.post("/rename-file", (req, res) => {
-  const { email, oldName, newName } = req.body;
-  if (!email || !oldName || !newName) {
-    return res.status(400).json({ message: "Missing fields" });
-  }
-
-  const safeEmail = email.replace(/[^a-zA-Z0-9@._-]/g, "");
-  const userFolder = path.join(UPLOADS_ROOT, safeEmail);
-
-  const oldPath = path.join(userFolder, path.basename(oldName));
-  const newPath = path.join(userFolder, path.basename(newName));
-
-  if (!fs.existsSync(oldPath)) {
-    return res.status(404).json({ message: "File not found" });
-  }
-
-  fs.renameSync(oldPath, newPath);
-  res.json({ message: "File renamed" });
-});
-
-/* ============ DELETE FILE ============ */
-app.post("/delete-file", (req, res) => {
-  const { email, filename } = req.body;
-  if (!email || !filename) {
-    return res.status(400).json({ message: "Missing fields" });
-  }
-
-  const safeEmail = email.replace(/[^a-zA-Z0-9@._-]/g, "");
-  const filePath = path.join(
-    UPLOADS_ROOT,
-    safeEmail,
-    path.basename(filename)
-  );
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ message: "File not found" });
-  }
-
-  fs.unlinkSync(filePath);
-  res.json({ message: "File deleted" });
-});
-
-/* ============ HEALTH CHECK ============ */
-app.get("/", (req, res) => {
-  res.send("File upload backend running 🚀");
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
-
+app.listen(PORT,()=>console.log("🚀 Vasuki Neem backend running"));
