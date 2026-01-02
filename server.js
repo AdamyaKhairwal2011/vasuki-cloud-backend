@@ -103,9 +103,6 @@ app.post("/share", (req, res) => {
 app.get("/shared-info/:token", (req, res) => {
   const db = readShares();
   const s = db[req.params.token];
-  if (!s || Date.now() > s.expires)
-    return res.sendStatus(404);
-
   res.json({
     user: s.email,
     files: s.files,
@@ -134,3 +131,4 @@ app.get("/shared-file/:token/*", (req, res) => {
 });
 
 app.listen(PORT,()=>console.log("🚀 Vasuki Neem backend running"));
+
