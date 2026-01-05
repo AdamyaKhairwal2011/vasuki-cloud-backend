@@ -74,7 +74,7 @@ app.post("/preview-html", (req, res) => {
   setTimeout(() => previews.delete(t), 10 * 60 * 1000);
 
   res.json({
-    url: `http://localhost:${PORT}/preview/${t}`
+    url: `https://vasuki-cloud-backend-production.up.railway.app/preview/${t}`
   });
 });
 
@@ -266,3 +266,4 @@ app.get("/shared-file/:token/*", (req, res) => {
 app.listen(PORT, () =>
   console.log(`🚀 Vasuki Cloud backend running on ${PORT}`)
 );
+
