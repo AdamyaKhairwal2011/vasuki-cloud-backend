@@ -74,7 +74,7 @@ app.post("/preview-html", (req, res) => {
   setTimeout(() => previews.delete(t), 10 * 60 * 1000);
 
   res.json({
-    url: `https://vasuki-cloud-backend-production.up.railway.app/preview/${t}`
+    url: `http://localhost:${PORT}/preview/${t}`
   });
 });
 
@@ -147,7 +147,7 @@ const storage = multer.diskStorage({
     fs.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
-  filename: (req, file, cb) => cb(null, file.originalname)
+  filename: (req, file, cb) => cb(null, file.originalname.trim())
 });
 
 const upload = multer({ storage });
@@ -266,4 +266,3 @@ app.get("/shared-file/:token/*", (req, res) => {
 app.listen(PORT, () =>
   console.log(`🚀 Vasuki Cloud backend running on ${PORT}`)
 );
-
